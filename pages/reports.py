@@ -18,299 +18,297 @@ GeoGuard Reports & Data Center — pages/reports.py
 Dashboard-style reporting page with one-click CSV exports and incident report
 preview plus PDF, HTML, and Markdown downloads.
 """
-from datetime import datetime, timezone
-from io import BytesIO
+
 import html
-import re
+from datetime import datetime, timezone
 
 import pandas as pd
 import streamlit as st
 
-from database.db import get_connection, get_road_sections, get_response_teams
-from modules.report_generator import convert_df_to_csv, generate_incident_report_markdown
+from database.db import (
+    get_connection,
+    get_road_sections,
+    get_response_teams,
+)
+from modules.report_generator import convert_df_to_csv
 
 
-def utc_stamp():
-    return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-
-
-def safe_filename(value):
-    return re.sub(r"[^A-Za-z0-9_-]+", "_", str(value)).strip("_") or "report"
-
-
-def load_data():
+def read_table(query):
     conn = get_connection()
     try:
-        telemetry = pd.read_sql_query(
-            "SELECT * FROM telemetry_history ORDER BY reading_id DESC LIMIT 1000", conn
-        )
-        alerts = pd.read_sql_query("SELECT * FROM alerts ORDER BY alert_id DESC", conn)
+        return pd.read_sql_query(query, conn)
     finally:
         conn.close()
-    return telemetry, alerts, get_road_sections(), get_response_teams()
 
 
-def build_html_report(markdown, incident_id):
-    """Create a self-contained HTML report that opens cleanly in a browser."""
-    blocks = []
-    in_list = False
-    for raw in str(markdown).splitlines():
-        line = raw.strip()
-        if not line:
-            if in_list:
-                blocks.append("</ul>")
-                in_list = False
-            continue
-        if line.startswith(("- ", "* ")):
-            if not in_list:
-                blocks.append("<ul>")
-                in_list = True
-            blocks.append(f"<li>{html.escape(line[2:])}</li>")
-            continue
-        if in_list:
-            blocks.append("</ul>")
-            in_list = False
-        if line.startswith("---"):
-            blocks.append("<hr>")
-        elif line.startswith("#"):
-            level = min(len(line) - len(line.lstrip("#")), 3)
-            blocks.append(f"<h{level}>{html.escape(line.lstrip('# ').strip())}</h{level}>")
-        else:
-            escaped = html.escape(line)
-            escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
-            blocks.append(f"<p>{escaped}</p>")
-    if in_list:
-        blocks.append("</ul>")
+def get_value(row, key, default="Not recorded"):
+    value = row.get(key, default)
+    if value is None or pd.isna(value):
+        return default
+    value = str(value).strip()
+    return value if value and value.lower() != "nan" else default
 
-    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    return f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+
+def build_dossier(alert, stations):
+    station_id = get_value(alert, "station_id")
+    station = next(
+        (
+            item for item in (stations or [])
+            if str(item.get("id", item.get("station_id", "")))
+            == str(station_id)
+        ),
+        {},
+    )
+
+    score = get_value(alert, "risk_score")
+    coords = "Not recorded"
+    try:
+        if station.get("lat") is not None and station.get("lon") is not None:
+            coords = f"{float(station['lat']):.5f}, {float(station['lon']):.5f}"
+    except (TypeError, ValueError):
+        pass
+
+    return {
+        "id": get_value(alert, "alert_id"),
+        "station": station_id,
+        "location": get_value(station, "name", station_id),
+        "corridor": get_value(station, "highway_corridor"),
+        "coordinates": coords,
+        "timestamp": get_value(alert, "timestamp"),
+        "risk": get_value(alert, "risk_level", "UNKNOWN").upper(),
+        "score": f"{score}/100" if score != "Not recorded" else score,
+        "status": get_value(alert, "status", "NEW"),
+        "reason": get_value(alert, "reason", "No reason recorded."),
+        "notes": get_value(alert, "operator_notes"),
+        "acknowledged_by": get_value(alert, "acknowledged_by"),
+        "ack_time": get_value(alert, "ack_timestamp"),
+        "generated": datetime.now(timezone.utc).strftime(
+            "%d %b %Y, %H:%M UTC"
+        ),
+    }
+
+
+def make_html_report(d):
+    e = lambda key: html.escape(str(d[key]))
+    color = (
+        "#ff4058" if d["risk"] == "CRITICAL"
+        else "#ffad42" if d["risk"] == "HIGH"
+        else "#36d6e7"
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GeoGuard Incident Report {html.escape(str(incident_id))}</title>
+<title>GeoGuard Dossier {e('id')}</title>
 <style>
-*{{box-sizing:border-box}} body{{margin:0;background:#eef3ef;color:#202923;
-font:16px/1.65 Arial,sans-serif}} main{{max-width:900px;margin:30px auto;padding:36px 42px;
-background:#fff;border:1px solid #dce5df;border-radius:14px}}
-.eyebrow{{color:#174c3c;font-weight:bold;letter-spacing:2px;font-size:12px}}
-h1,h2,h3{{color:#174c3c;line-height:1.3}} .notice{{padding:12px 15px;background:#fff4d8;
-color:#725317;border-radius:8px;font-size:13px}} footer{{border-top:1px solid #dce5df;
-margin-top:30px;padding-top:12px;color:#637168;font-size:12px}}
-@media print{{body{{background:#fff}}main{{margin:0;border:0;padding:0}}}}
-</style></head><body><main>
+*{{box-sizing:border-box}}
+body{{margin:0;background:#08111f;color:#edf5ff;
+font:15px/1.6 Arial,sans-serif}}
+main{{max-width:900px;margin:30px auto;padding:22px}}
+header{{border-bottom:2px solid #36d6e7;padding-bottom:18px}}
+.eyebrow{{color:#36d6e7;letter-spacing:2px;font-size:12px}}
+h1{{font-size:32px;margin:8px 0}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));
+gap:12px;margin:22px 0}}
+.card,.section{{background:#101e31;border:1px solid #263b55;
+border-radius:10px;padding:17px;margin-bottom:12px}}
+.label{{font-size:11px;color:#9db0c8;letter-spacing:1px}}
+.value{{font-size:20px;font-weight:bold;margin-top:6px;overflow-wrap:anywhere}}
+.badge{{color:{color};border:1px solid {color};padding:4px 10px;
+display:inline-block;border-radius:5px;font-weight:bold}}
+.muted{{color:#9db0c8}}
+.notice{{background:#102638;border-left:3px solid #36d6e7;padding:14px}}
+@media print{{body{{background:white;color:#111}}
+.card,.section,.notice{{background:white;color:#111;border-color:#bbb}}}}
+</style>
+</head>
+<body><main>
+<header>
 <div class="eyebrow">GEOGUARD / INCIDENT ARCHIVE</div>
-<h1>Incident Report #{html.escape(str(incident_id))}</h1>
-<p style="color:#637168;font-size:13px">Generated {generated}</p>
-<div class="notice">Prototype-generated report. Verify incident details and sensor
-readings before operational use. This is not an official regulatory certification
-or a validated landslide prediction.</div>
-{''.join(blocks)}
-<footer>GeoGuard · Prototype reporting output</footer>
+<h1>Geotechnical Incident Dossier</h1>
+<div class="muted">Reference GEO-INC-{e('id')} · Generated {e('generated')}</div>
+<p><span class="badge">{e('risk')}</span></p>
+</header>
+<div class="grid">
+<div class="card"><div class="label">INCIDENT ID</div>
+<div class="value">#{e('id')}</div></div>
+<div class="card"><div class="label">RISK INDEX</div>
+<div class="value">{e('score')}</div></div>
+<div class="card"><div class="label">MONITORING STATION</div>
+<div class="value">{e('station')}</div></div>
+<div class="card"><div class="label">INCIDENT STATUS</div>
+<div class="value">{e('status')}</div></div>
+</div>
+<div class="section"><h2>01 · Location & Detection</h2>
+<p><b>Location:</b> {e('location')}</p>
+<p><b>Highway corridor:</b> {e('corridor')}</p>
+<p><b>Coordinates:</b> {e('coordinates')}</p>
+<p><b>Recorded timestamp:</b> {e('timestamp')}</p></div>
+<div class="section"><h2>02 · Recorded Trigger</h2>
+<p>{e('reason')}</p></div>
+<div class="section"><h2>03 · Response Audit Trail</h2>
+<p><b>Status:</b> {e('status')}</p>
+<p><b>Acknowledged by:</b> {e('acknowledged_by')}</p>
+<p><b>Acknowledgment time:</b> {e('ack_time')}</p>
+<p><b>Operator notes:</b> {e('notes')}</p></div>
+<div class="notice"><b>Prototype safety notice</b><br>
+This is a system-generated prototype report, not an official government
+order or independently verified landslide prediction. Verify site conditions
+and response actions with qualified professionals and responsible authorities.
+Missing information is marked as not recorded.</div>
 </main></body></html>"""
 
 
-def build_pdf_report(markdown, incident_id):
-    try:
-        from reportlab.lib import colors
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib.units import mm
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
-    except ImportError as exc:
-        raise RuntimeError("PDF export needs reportlab. Add 'reportlab' to requirements.txt.") from exc
-
-    output = BytesIO()
-    doc = SimpleDocTemplate(output, pagesize=A4, leftMargin=18*mm, rightMargin=18*mm,
-                            topMargin=18*mm, bottomMargin=18*mm,
-                            title=f"GeoGuard Incident Report {incident_id}")
-    styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name="GGTitle", parent=styles["Title"], fontSize=20,
-                              leading=25, textColor=colors.HexColor("#174c3c"),
-                              spaceAfter=12))
-    styles.add(ParagraphStyle(name="GGHeading", parent=styles["Heading2"], fontSize=12,
-                              leading=16, textColor=colors.HexColor("#174c3c"),
-                              spaceBefore=9, spaceAfter=5))
-    styles.add(ParagraphStyle(name="GGBody", parent=styles["BodyText"], fontSize=9,
-                              leading=13, spaceAfter=5))
-    story = [
-        Paragraph(f"GeoGuard Incident Report #{html.escape(str(incident_id))}", styles["GGTitle"]),
-        Paragraph("Prototype-generated report. Verify details before operational use.",
-                  styles["GGBody"]),
-        HRFlowable(width="100%", thickness=1, color=colors.HexColor("#dce5df")),
-        Spacer(1, 8),
-    ]
-    for raw in str(markdown).splitlines():
-        line = raw.strip()
-        if not line:
-            story.append(Spacer(1, 3))
-        elif line.startswith("#"):
-            story.append(Paragraph(html.escape(line.lstrip("# ").strip()), styles["GGHeading"]))
-        elif line.startswith(("- ", "* ")):
-            story.append(Paragraph(f"&bull;&nbsp;{html.escape(line[2:])}", styles["GGBody"]))
-        elif line.startswith("---"):
-            story.append(HRFlowable(width="100%", thickness=.5,
-                                    color=colors.HexColor("#dce5df")))
-        else:
-            line = re.sub(r"\*\*(.*?)\*\*", r"\1", line)
-            line = re.sub(r"\*(.*?)\*", r"\1", line)
-            story.append(Paragraph(html.escape(line), styles["GGBody"]))
-
-    def footer(canvas, document):
-        canvas.saveState()
-        canvas.setFont("Helvetica", 8)
-        canvas.setFillColor(colors.HexColor("#637168"))
-        canvas.drawString(18*mm, 10*mm, "GeoGuard | Prototype report")
-        canvas.drawRightString(A4[0]-18*mm, 10*mm, f"Page {document.page}")
-        canvas.restoreState()
-
-    doc.build(story, onFirstPage=footer, onLaterPages=footer)
-    return output.getvalue()
-
-
-def export_card(icon, title, description, df, filename, key):
-    with st.container(border=True):
-        st.markdown(f"#### {icon} {title}")
-        st.caption(description)
-        st.metric("Available rows", f"{len(df):,}")
-        st.download_button(
-            "Download CSV", data=convert_df_to_csv(df), file_name=filename,
-            mime="text/csv", use_container_width=True, disabled=df.empty, key=key,
-        )
-
-
 def render_reports_page(enriched_stations):
-    st.markdown(
-        "<div style='color:#78968A;font-size:12px;letter-spacing:2px;"
-        "font-weight:700'>GEOGUARD / REPORTING CENTER</div>",
-        unsafe_allow_html=True,
-    )
-    st.title("Reports & Data Center")
-    st.caption("Review incidents, preview reports, and export GeoGuard data from one place.")
+    st.markdown("""
+    <div style="color:#36D6E7;letter-spacing:2px;font-size:12px">
+    GEOGUARD / MISSION CONTROL</div>
+    <h1>Reports & Downloads</h1>
+    <p style="color:#9DB0C8">Incident intelligence · Data archive · Dossiers</p>
+    """, unsafe_allow_html=True)
 
     try:
-        telemetry, alerts, roads, teams = load_data()
+        telemetry = read_table(
+            "SELECT * FROM telemetry_history "
+            "ORDER BY reading_id DESC LIMIT 1000"
+        )
+        alerts = read_table(
+            "SELECT * FROM alerts ORDER BY alert_id DESC"
+        )
+        roads = get_road_sections()
+        teams = get_response_teams()
     except Exception as exc:
-        st.error("Could not load reporting data from the database.")
-        st.caption(f"Details: {exc}")
+        st.error("Could not load report data.")
+        st.caption(str(exc))
         return
 
-    stamp = utc_stamp()
-    st.subheader("Archive overview")
-    a, b, c, d = st.columns(4)
-    a.metric("Telemetry records", f"{len(telemetry):,}")
-    b.metric("Alert records", f"{len(alerts):,}")
-    c.metric("Road sections", f"{len(roads):,}")
-    d.metric("Response units", f"{len(teams):,}")
-    st.divider()
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Telemetry", len(telemetry))
+    m2.metric("Incidents", len(alerts))
+    m3.metric("Road sections", len(roads))
+    m4.metric("Response teams", len(teams))
 
-    st.subheader("Download datasets")
-    st.caption("Telemetry export contains the latest 1,000 readings; other exports contain rows returned by their data functions.")
-    col1, col2 = st.columns(2)
-    col3, col4 = st.columns(2)
-    with col1:
-        export_card("📊", "Telemetry history", "Sensor readings for analysis.", telemetry,
-                    f"geoguard_telemetry_{stamp}.csv", "export_telemetry")
-    with col2:
-        export_card("🚨", "Incident alerts", "Recorded alerts and risk fields.", alerts,
-                    f"geoguard_alerts_{stamp}.csv", "export_alerts")
-    with col3:
-        export_card("🚧", "Road sections", "Road-section records and stored statuses.", roads,
-                    f"geoguard_road_sections_{stamp}.csv", "export_roads")
-    with col4:
-        export_card("🧑‍🚒", "Response units", "Configured response teams and contact channels.", teams,
-                    f"geoguard_response_units_{stamp}.csv", "export_teams")
+    st.markdown("---")
+    st.subheader("Data Export Center")
 
-    st.divider()
-    st.subheader("Incident report")
-    st.caption("Choose an alert; its report preview appears immediately below.")
+    exports = [
+        ("Telemetry History", telemetry, "telemetry"),
+        ("Incident Alerts", alerts, "alerts"),
+        ("Road Sections", roads, "roads"),
+        ("Response Teams", teams, "teams"),
+    ]
+    columns = st.columns(4)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M")
+
+    for col, (title, frame, slug) in zip(columns, exports):
+        with col:
+            st.markdown(
+                f"""<div style="background:#0D1829;border:1px solid #263B55;
+                border-top:2px solid #36D6E7;border-radius:9px;padding:14px">
+                <b>{title}</b><p style="color:#36D6E7">{len(frame)} records</p>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+            st.download_button(
+                "Download CSV",
+                data=convert_df_to_csv(frame),
+                file_name=f"geoguard_{slug}_{stamp}.csv",
+                mime="text/csv",
+                key=f"export_{slug}",
+                use_container_width=True,
+            )
+
+    st.markdown("---")
+    st.subheader("🚨 Geotechnical Incident Dossier")
+    st.caption("Select an incident and open its full dossier with one click.")
 
     if alerts.empty:
-        st.info("No alert records are available yet. Reports can be generated when alerts are recorded.")
+        st.info("No incidents recorded yet.")
         return
 
-    required = {"alert_id", "station_id", "risk_level", "timestamp"}
-    missing = required - set(alerts.columns)
-    if missing:
-        st.error("Alerts table is missing required fields: " + ", ".join(sorted(missing)))
+    if "alert_id" not in alerts.columns:
+        st.error("The alerts table is missing alert_id.")
         return
 
-    options = {
+    ids = alerts["alert_id"].tolist()
+    labels = {
         row["alert_id"]: (
-            f"#{row['alert_id']} | Station {row['station_id']} | "
-            f"{row['risk_level']} | {row['timestamp']}"
+            f"#{row['alert_id']} · {get_value(row, 'station_id')} · "
+            f"{get_value(row, 'risk_level', 'UNKNOWN')} · "
+            f"{get_value(row, 'timestamp')}"
         )
         for _, row in alerts.iterrows()
     }
-    selected_id = st.selectbox(
-        "Select incident", list(options.keys()),
-        format_func=lambda value: options[value], key="geoguard_selected_incident",
-    )
-    selected = alerts[alerts["alert_id"] == selected_id]
-    if selected.empty:
-        st.warning("The selected incident could not be found.")
-        return
 
-    alert_row = selected.iloc[0].to_dict()
-    station = next(
-        (s for s in (enriched_stations or [])
-         if str(s.get("id")) == str(alert_row["station_id"])),
-        None,
+    selected = st.selectbox(
+        "Choose incident",
+        ids,
+        format_func=lambda value: labels[value],
+        key="selected_dossier",
     )
-    try:
-        report_md = generate_incident_report_markdown(alert_row, station_info=station)
-    except Exception as exc:
-        st.error("Could not generate this incident report.")
-        st.caption(f"Details: {exc}")
-        return
 
-    with st.container(border=True):
-        st.markdown("### 📄 Report preview")
-        m1, m2, m3 = st.columns(3)
-        m1.markdown(f"**Incident**\n\n#{selected_id}")
-        m2.markdown(f"**Station**\n\n{alert_row['station_id']}")
-        m3.markdown(f"**Risk level**\n\n{alert_row['risk_level']}")
+    alert = alerts[alerts["alert_id"] == selected].iloc[0].to_dict()
+    dossier = build_dossier(alert, enriched_stations)
+    report_html = make_html_report(dossier)
+
+    # One click opens the selected dossier directly below.
+    if st.button(
+        "↗ Open Incident Dossier",
+        type="primary",
+        use_container_width=True,
+        key="open_dossier",
+    ):
+        st.session_state["open_dossier_id"] = str(selected)
+
+    if st.session_state.get("open_dossier_id") == str(selected):
+        st.markdown(f"""
+        <div style="background:#0A101A;border:1px solid #263B55;
+        border-top:3px solid #36D6E7;padding:18px;border-radius:10px">
+        <div style="color:#36D6E7;letter-spacing:2px;font-size:11px">
+        DOSSIER OPEN · GEO-INC-{html.escape(str(selected))}</div>
+        <h2>Geotechnical Incident Dossier</h2>
+        <p style="color:#9DB0C8">Station {html.escape(dossier['station'])}
+        · {html.escape(dossier['timestamp'])}</p></div>
+        """, unsafe_allow_html=True)
+
+        a, b, c = st.columns(3)
+        a.metric("Risk level", dossier["risk"])
+        b.metric("Risk index", dossier["score"])
+        c.metric("Status", dossier["status"])
+
+        st.markdown(f"**Incident ID:** `{dossier['id']}`")
+        st.markdown(f"**Location:** {dossier['location']}")
+        st.markdown(f"**Highway corridor:** {dossier['corridor']}")
+        st.markdown(f"**Coordinates:** {dossier['coordinates']}")
+        st.markdown(f"**Timestamp:** {dossier['timestamp']}")
+        st.markdown("#### Recorded trigger")
+        st.write(dossier["reason"])
+        st.markdown("#### Response audit trail")
+        st.write(f"**Acknowledged by:** {dossier['acknowledged_by']}")
+        st.write(f"**Acknowledgment time:** {dossier['ack_time']}")
+        st.write(f"**Operator notes:** {dossier['notes']}")
+
         st.warning(
-            "Prototype-generated report. Verify incident details and sensor readings "
-            "before operational use. This is not an official regulatory certification "
-            "or a validated landslide prediction."
+            "Prototype report only. It is not an official government warning."
         )
-        st.markdown(report_md)
 
-    st.markdown("#### Export selected report")
-    pdf_col, html_col, md_col = st.columns(3)
-    report_id = safe_filename(selected_id)
-
-    with pdf_col:
-        try:
-            pdf = build_pdf_report(report_md, selected_id)
-            st.download_button(
-                "📄 Download PDF", data=pdf,
-                file_name=f"GEO_INCIDENT_REPORT_{report_id}.pdf",
-                mime="application/pdf", use_container_width=True, type="primary",
-                key=f"report_pdf_{report_id}",
-            )
-        except RuntimeError as exc:
-            st.info(str(exc))
-
-    with html_col:
-        html_report = build_html_report(report_md, selected_id)
         st.download_button(
-            "🌐 Download HTML", data=html_report.encode("utf-8"),
-            file_name=f"GEO_INCIDENT_REPORT_{report_id}.html",
-            mime="text/html", use_container_width=True, key=f"report_html_{report_id}",
-            help="Download, then open the HTML file in a browser for a clean report view.",
+            "⬇ Download HTML Dossier",
+            data=report_html.encode("utf-8"),
+            file_name=f"GEO_INCIDENT_DOSSIER_{selected}.html",
+            mime="text/html",
+            key=f"download_html_{selected}",
+            use_container_width=True,
+        )
+        st.caption(
+            "Open the downloaded HTML file in a browser. "
+            "Use Print → Save as PDF for a PDF copy."
         )
 
-    with md_col:
-        st.download_button(
-            "📝 Download Markdown", data=report_md.encode("utf-8"),
-            file_name=f"GEO_INCIDENT_REPORT_{report_id}.md",
-            mime="text/markdown", use_container_width=True, key=f"report_md_{report_id}",
-        )
-
-    with st.expander("View raw Markdown source"):
-        st.code(report_md, language="markdown")
-
+    st.markdown("---")
     st.caption(
-        "Data note: telemetry is limited to the latest 1,000 readings. "
-        "Confirm export completeness before using these files as formal archives."
+        "GeoGuard is an engineering prototype. Thresholds and risk outputs "
+        "require field calibration and geotechnical validation."
     )
