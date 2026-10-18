@@ -13,7 +13,7 @@ Provides:
 GEOGUARD | Reports & Downloads
 Dark mission-control design with one-click exports.
 """
-  """
+"""
 GeoGuard Reports & Data Center — pages/reports.py
 Dashboard-style reporting page with one-click CSV exports and incident report
 preview plus PDF, HTML, and Markdown downloads.
