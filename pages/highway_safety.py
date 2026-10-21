@@ -17,6 +17,18 @@ from database.db import get_road_sections, update_road_section
 from modules.ui import render_highway_linear_schematic, render_html
 
 
+STATUS_COLORS = {
+    "OPEN": "#10B981",
+    "UNDER OBSERVATION": "#F59E0B",
+    "RESTRICTED": "#F97316",
+    "CLOSED": "#EF4444",
+    "REOPENED": "#38BDF8",
+}
+
+
+def get_status_color(status):
+    return STATUS_COLORS.get(str(status).upper(), "#94A3B8")
+
 def render_highway_safety_page(enriched_stations):
     """Renders the highway safety and corridor closure management view."""
     st.markdown("<div class='hud-eyebrow'>HIGHWAY TRAFFIC SURVEILLANCE & CLOSURES</div>", unsafe_allow_html=True)
@@ -29,49 +41,159 @@ def render_highway_safety_page(enriched_stations):
         st.warning("No highway road sections registered in database.")
         return
 
+    
+    # 1A. Dynamic Highway Status Summary
+    st.markdown("### Highway Status Overview")
+
+    total_sections = len(sections_df)
+    status_counts = (
+        sections_df["status"]
+        .astype(str)
+        .str.upper()
+        .value_counts()
+    )
+
+    summary_items = [
+        ("TOTAL CHECKPOINTS", total_sections, "#38BDF8"),
+        ("OPEN", int(status_counts.get("OPEN", 0)), "#10B981"),
+        ("UNDER OBSERVATION", int(status_counts.get("UNDER OBSERVATION", 0)), "#F59E0B"),
+        ("RESTRICTED", int(status_counts.get("RESTRICTED", 0)), "#F97316"),
+        ("CLOSED", int(status_counts.get("CLOSED", 0)), "#EF4444"),
+    ]
+
+    summary_cols = st.columns(len(summary_items))
+
+    for col, (label, count, color) in zip(summary_cols, summary_items):
+        with col:
+            st.markdown(
+                f"""
+                <div style="
+                    background: #111827;
+                    border: 1px solid #1F2937;
+                    border-top: 3px solid {color};
+                    border-radius: 8px;
+                    padding: 14px 10px;
+                    text-align: center;
+                ">
+                    <div style="font-size: 12px; color: #94A3B8;">
+                        {label}
+                    </div>
+                    <div style="font-size: 28px; font-weight: 700; color: {color};">
+                        {count}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    
     # 2. Highway Linear Corridor Strip Schematic
     render_highway_linear_schematic(sections_df)
 
-    # 3. Highway Corridor Status Summary Cards
-    st.markdown("### Corridor Checkpoint Status")
     
-    for _, sec in sections_df.iterrows():
+    # 3. Highway Corridor Checkpoint Status
+    st.markdown("### Corridor Checkpoint Status")
+
+    search_col, filter_col = st.columns([2, 1])
+
+    with search_col:
+        search_query = st.text_input(
+            "Search checkpoint",
+            placeholder="Search by ID, name, corridor or station...",
+            key="highway_checkpoint_search",
+        )
+
+    with filter_col:
+        selected_status = st.selectbox(
+            "Filter by status",
+            [
+                "ALL",
+                "OPEN",
+                "UNDER OBSERVATION",
+                "RESTRICTED",
+                "CLOSED",
+                "REOPENED",
+            ],
+            key="highway_checkpoint_status_filter",
+        )
+
+    filtered_sections = sections_df.copy()
+
+    if selected_status != "ALL":
+        filtered_sections = filtered_sections[
+            filtered_sections["status"].astype(str).str.upper()
+            == selected_status
+        ]
+
+    if search_query.strip():
+        searchable_columns = [
+            col for col in [
+                "section_id", "name", "corridor", "associated_station"
+            ]
+            if col in filtered_sections.columns
+        ]
+
+        search_mask = filtered_sections[searchable_columns].astype(str).apply(
+            lambda column: column.str.contains(
+                search_query.strip(),
+                case=False,
+                na=False,
+                regex=False,
+            )
+        ).any(axis=1)
+
+        filtered_sections = filtered_sections[search_mask]
+
+    st.caption(
+        f"Showing {len(filtered_sections)} of {len(sections_df)} checkpoints"
+    )
+
+    if filtered_sections.empty:
+        st.info("No checkpoints match your search or selected status.")
+
+    for _, sec in filtered_sections.iterrows():
         sec_id = sec["section_id"]
-        status = sec["status"]
+        status = str(sec["status"]).upper()
         risk_lvl = sec["risk_level"]
-        
-        status_color_map = {
-            "OPEN": "#10B981",
-            "UNDER OBSERVATION": "#F59E0B",
-            "RESTRICTED": "#F97316",
-            "CLOSED": "#EF4444",
-            "REOPENED": "#38BDF8"
-        }
-        color = status_color_map.get(status, "#94A3B8")
+        color = get_status_color(status)
 
         with st.container():
             render_html(f"""
-            <div style='background: #111827; border-left: 4px solid {color}; border-top: 1px solid #1F2937; border-right: 1px solid #1F2937; border-bottom: 1px solid #1F2937; border-radius: 6px; padding: 14px 18px; margin-bottom: 10px;'>
-                <div style='display: flex; justify-content: space-between; align-items: center;'>
+            <div style='background: #111827; border-left: 4px solid {color};
+                border-top: 1px solid #1F2937; border-right: 1px solid #1F2937;
+                border-bottom: 1px solid #1F2937; border-radius: 6px;
+                padding: 14px 18px; margin-bottom: 10px;'>
+                <div style='display: flex; justify-content: space-between;
+                    align-items: center;'>
                     <div>
-                        <span style='font-size: 15px; font-weight: 600; color: #F8FAFC;'>{sec_id}: {sec['name']}</span>
-                        <span class='font-mono' style='margin-left: 10px; font-size: 11px; color: #38BDF8;'>[Node: {sec['associated_station']}]</span>
+                        <span style='font-size: 15px; font-weight: 600;
+                            color: #F8FAFC;'>{sec_id}: {sec['name']}</span>
+                        <span class='font-mono' style='margin-left: 10px;
+                            font-size: 11px; color: #38BDF8;'>
+                            [Node: {sec['associated_station']}]
+                        </span>
                     </div>
-                    <div style='background: rgba(16, 185, 129, 0.1); color: {color}; border: 1px solid {color}55; padding: 3px 10px; border-radius: 4px; font-family: "JetBrains Mono", monospace; font-size: 11px; font-weight: 600;'>
+                    <div style='background: {color}20; color: {color};
+                        border: 1px solid {color}55; padding: 3px 10px;
+                        border-radius: 4px; font-family: monospace;
+                        font-size: 11px; font-weight: 600;'>
                         ● {status}
                     </div>
                 </div>
                 <div style='font-size: 12px; color: #94A3B8; margin-top: 5px;'>
-                    Corridor Segment: {sec['corridor']} • Sector Risk Rating: <b style='color:{color};'>{risk_lvl}</b>
+                    Corridor Segment: {sec['corridor']} • Sector Risk Rating:
+                    <b style='color:{color};'>{risk_lvl}</b>
                 </div>
                 <div style='font-size: 13px; color: #E2E8F0; margin-top: 6px;'>
                     <b>Field Inspector Directive:</b> {sec['condition_notes']}
                 </div>
-                <div class='font-mono' style='font-size: 11px; color: #64748B; margin-top: 6px;'>
+                <div class='font-mono' style='font-size: 11px;
+                    color: #64748B; margin-top: 6px;'>
                     Modified: {sec['last_updated']} by {sec['updated_by']}
                 </div>
             </div>
             """)
+
 
     st.markdown("<hr style='border:0; border-top:1px solid #1F2937; margin: 16px 0;'>", unsafe_allow_html=True)
 
