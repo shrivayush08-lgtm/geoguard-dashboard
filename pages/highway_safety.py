@@ -226,6 +226,12 @@ def render_highway_safety_page(enriched_stations):
             }
             color = status_color_map.get(status, "#94A3B8")
             
+            last_insp = (
+                sec["last_updated"] if "last_updated" in sec and pd.notna(sec["last_updated"])
+                else (sec["last_status_change"] if "last_status_change" in sec and pd.notna(sec["last_status_change"]) else "Recent")
+            )
+            auth_by = sec["updated_by"] if "updated_by" in sec and pd.notna(sec["updated_by"]) else "Authorized Inspector"
+            
             card_html = f"""
             <div style='background: #111827; border: 1px solid #1F2937; border-left: 4px solid {color}; border-radius: 6px; padding: 14px 18px; margin-bottom: 12px;'>
                 <div style='display: flex; justify-content: space-between; align-items: center;'>
@@ -249,7 +255,7 @@ def render_highway_safety_page(enriched_stations):
                     <b>Field Inspector Directive:</b> {sec['condition_notes']}
                 </div>
                 <div class='font-mono' style='font-size: 10px; color: #64748B; margin-top: 6px;'>
-                    Last Inspection: {sec['last_status_change']} • Authorized By: {sec['updated_by']} • Linked Node: {stn_id}
+                    Last Inspection: {last_insp} • Authorized By: {auth_by} • Linked Node: {stn_id}
                 </div>
             </div>
             """

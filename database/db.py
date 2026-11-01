@@ -180,7 +180,7 @@ def init_db():
     cursor.execute("SELECT COUNT(*) FROM road_sections")
     if cursor.fetchone()[0] == 0:
         default_sections = [
-            ("SEC-01", "Shivpuri - Byasi Mountain Corridor", "NH-58 km 35-48", "GG-001", "CLOSED", "CRITICAL", 30.1050, 78.3950, 30.1380, 78.4550, "Critical slope displacement detected. Sector closed to vehicular transit; divert via NH-707A.", datetime.utcnow().isoformat(), "Inspector BRO Highway Command"),
+            ("SEC-01", "Shivpuri - Byasi Mountain Corridor", "NH-58 km 35-48", "GG-001", "OPEN", "LOW", 30.1050, 78.3950, 30.1380, 78.4550, "Clear highway conditions, optimal dry friction.", datetime.utcnow().isoformat(), "Highway Inspector"),
             ("SEC-02", "Byasi - Kaudiyala Gorge Run", "NH-58 km 48-62", "GG-002", "OPEN", "LOW", 30.1380, 78.4550, 30.1750, 78.4980, "Active drainage channels clear; debris traps nominal.", datetime.utcnow().isoformat(), "Highway Inspector"),
             ("SEC-03", "Kaudiyala - Devprayag Bridge Cut", "NH-58 km 62-78", "GG-003", "OPEN", "LOW", 30.1750, 78.4980, 30.2200, 78.5350, "Bridge foundation telemetry secure; slope nets intact.", datetime.utcnow().isoformat(), "Highway Inspector"),
             ("SEC-04", "Devprayag - Kirtinagar Ridge", "NH-58 km 78-95", "GG-004", "OPEN", "LOW", 30.2200, 78.5350, 30.2650, 78.5900, "Minor loose gravel clearing completed.", datetime.utcnow().isoformat(), "Highway Inspector"),
