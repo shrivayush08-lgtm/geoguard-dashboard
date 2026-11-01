@@ -13,6 +13,7 @@ Manages:
 """
 
 import streamlit as st
+import pandas as pd
 from database.db import get_road_sections, update_road_section, get_alerts
 from modules.ui import render_highway_linear_schematic, render_html
 
