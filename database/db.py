@@ -141,6 +141,13 @@ def init_db():
         )
     ''')
 
+    # Migration: Ensure road_sections has last_updated and updated_by if table existed previously
+    for col_name, col_type in [("last_updated", "TEXT"), ("updated_by", "TEXT DEFAULT 'System'")]:
+        try:
+            cursor.execute(f"ALTER TABLE road_sections ADD COLUMN {col_name} {col_type}")
+        except sqlite3.OperationalError:
+            pass
+
     # 6. Emergency Response Teams Table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS response_teams (
