@@ -13,7 +13,14 @@ Manages:
 """
 
 import streamlit as st
-from database.db import get_alerts, update_alert_status, log_alert, get_response_teams
+from database.db import (
+    get_alerts,
+    update_alert_status,
+    log_alert,
+    get_response_teams,
+    get_road_sections,
+    log_risk_assessment
+)
 from modules.ui import render_html
 
 
@@ -21,6 +28,13 @@ def render_alert_center_page(enriched_stations):
     """Renders the alert management center."""
     st.markdown("<div class='hud-eyebrow'>INCIDENT LOG & RESPONSE QUEUE</div>", unsafe_allow_html=True)
     st.markdown("<h2 style='margin-top:0;'>Incident Operations & Alert Center</h2>", unsafe_allow_html=True)
+
+    # Checkpoint mapping from road sections
+    roads_df = get_road_sections()
+    checkpoint_map = {}
+    if not roads_df.empty:
+        for _, sec in roads_df.iterrows():
+            checkpoint_map[str(sec["associated_station"])] = f"{sec['section_id']}: {sec['name']}"
 
     # 1. Top Controls Bar: Filter & Emergency Simulation Drill
     top_col1, top_col2, top_col3 = st.columns([1.5, 1.5, 2])
@@ -40,6 +54,18 @@ def render_alert_center_page(enriched_stations):
                 reason="SIMULATED EMERGENCY DRILL: Acute pore saturation (88.4%) & slope shear slip (+3.12°).",
                 is_test=1
             )
+            log_risk_assessment({
+                "station_id": "GG-001",
+                "risk_score": 88.5,
+                "risk_level": "CRITICAL",
+                "soil_factor_score": 88.4,
+                "rain_factor_score": 75.0,
+                "tilt_factor_score": 90.0,
+                "vib_factor_score": 85.0,
+                "contributing_factors": ["SIMULATED EMERGENCY DRILL: Acute pore saturation (88.4%) & slope shear slip (+3.12°)"],
+                "recommended_action": "Critical Danger - Emergency response required",
+                "assessment_mode": "DRILL"
+            })
             st.toast(f"Drill Incident #{alert_id} Logged!", icon="🚨")
             st.rerun()
     with top_col3:
@@ -65,6 +91,8 @@ def render_alert_center_page(enriched_stations):
         alert_id = row["alert_id"]
         status = row["status"]
         risk_lvl = row["risk_level"]
+        station_id_str = str(row["station_id"])
+        checkpoint_name = checkpoint_map.get(station_id_str, "NH-58 Mountain Corridor")
         
         border_color = (
             "#EF4444" if "CRITICAL" in risk_lvl 
@@ -82,7 +110,7 @@ def render_alert_center_page(enriched_stations):
                     <div>
                         <span class='hud-badge {badge_class}'>{risk_lvl}</span>
                         <span style='font-size: 14px; font-weight: 600; color: #F8FAFC; margin-left: 10px;'>
-                            Incident #{alert_id} • Station {row['station_id']}
+                            Incident #{alert_id} • Station {row['station_id']} • Checkpoint: {checkpoint_name}
                         </span>
                         {'<span class="hud-badge" style="background:rgba(255,255,255,0.08); color:#94A3B8; margin-left:8px;">TEST_DRILL</span>' if row.get('is_test') else ''}
                     </div>
@@ -113,12 +141,15 @@ def render_alert_center_page(enriched_stations):
                         key=f"status_sel_{alert_id}"
                     )
                 with act_col2:
-                    operator_name = st.text_input("Watch Officer ID", value="Duty Officer Garhwal", key=f"op_{alert_id}")
+                    existing_officer = row.get("acknowledged_by") or row.get("resolved_by") or "Duty Officer Garhwal"
+                    operator_name = st.text_input("Watch Officer ID", value=existing_officer, key=f"op_{alert_id}")
                     notes = st.text_input("Incident Action Notes", value=row['operator_notes'] or "", key=f"notes_{alert_id}")
                 with act_col3:
                     teams_df = get_response_teams()
                     team_list = ["None"] + teams_df["team_name"].tolist() if not teams_df.empty else ["None"]
-                    assigned_t = st.selectbox("Assign Response Unit", team_list, key=f"team_{alert_id}")
+                    current_assigned = row.get("assigned_team") or "None"
+                    team_idx = team_list.index(current_assigned) if current_assigned in team_list else 0
+                    assigned_t = st.selectbox("Assign Response Unit", team_list, index=team_idx, key=f"team_{alert_id}")
                     
                     if st.button("Commit Incident Update", key=f"commit_{alert_id}", type="primary", use_container_width=True):
                         team_val = None if assigned_t == "None" else assigned_t

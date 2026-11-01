@@ -51,6 +51,7 @@ from datetime import datetime, timezone
 from database.db import (
     init_db,           # Initializes SQLite database schema
     log_alert,         # Logs alerts with cooldown & audit trail
+    log_risk_assessment, # Persists risk assessment calculations
     log_telemetry,     # Persists sensor measurements
     get_config         # Reads persistent configuration parameters
 )
@@ -260,7 +261,7 @@ st.session_state._was_critical_active = has_critical
 for stn in enriched_stations:
     if stn["risk_level"] == "CRITICAL":
         cooldown_val = int(get_config("alert_cooldown_minutes", "10"))
-        log_alert(
+        alert_id, created = log_alert(
             station_id=stn["id"],
             risk_level="CRITICAL",
             risk_score=stn["risk_score"],
@@ -268,6 +269,20 @@ for stn in enriched_stations:
             is_test=1 if st.session_state.emergency else 0,
             cooldown_minutes=cooldown_val
         )
+        if created:
+            bd = stn.get("breakdown", {})
+            log_risk_assessment({
+                "station_id": stn["id"],
+                "risk_score": stn["risk_score"],
+                "risk_level": stn["risk_level"],
+                "soil_factor_score": bd.get("soil", 0.0),
+                "rain_factor_score": bd.get("rain", 0.0),
+                "tilt_factor_score": bd.get("slope", 0.0),
+                "vib_factor_score": bd.get("vibration", 0.0),
+                "contributing_factors": stn.get("factors", []),
+                "recommended_action": stn.get("recommended_action", ""),
+                "assessment_mode": "DRILL" if st.session_state.emergency else "AUTOMATED"
+            })
 
 # ---------------------------------------------------------------------------
 # SECTION 7: Sidebar Navigation & Control Panel
