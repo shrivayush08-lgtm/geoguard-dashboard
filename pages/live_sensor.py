@@ -215,8 +215,11 @@ def render_live_sensor_page(enriched_stations):
         elif op_mode == "HARDWARE":
             gateway = st.session_state.get("serial_gateway")
             is_conn = gateway.is_connected if gateway else False
+            hw_source = st.session_state.get("hardware_source")
             if is_conn:
                 conn_html = "<span style='background: rgba(16, 185, 129, 0.12); border: 1px solid #10B981; color: #10B981; padding: 6px 12px; border-radius: 4px; font-family: monospace; font-size: 11px; font-weight: 600; display: inline-block;'>● ESP32 SERIAL CONNECTED</span>"
+            elif hw_source == "CLOUD_RELAY":
+                conn_html = "<span style='background: rgba(16, 185, 129, 0.12); border: 1px solid #10B981; color: #10B981; padding: 6px 12px; border-radius: 4px; font-family: monospace; font-size: 11px; font-weight: 600; display: inline-block;'>● CLOUD IOT RELAY ACTIVE</span>"
             else:
                 conn_html = "<span style='background: rgba(239, 68, 68, 0.12); border: 1px solid #EF4444; color: #EF4444; padding: 6px 12px; border-radius: 4px; font-family: monospace; font-size: 11px; font-weight: 600; display: inline-block;'>○ HARDWARE DISCONNECTED</span>"
         else:
@@ -229,7 +232,7 @@ def render_live_sensor_page(enriched_stations):
     if op_mode == "HARDWARE" and gateway and not gateway.is_connected:
         if "locked" in gateway.status_message.lower() or "busy" in gateway.status_message.lower() or "access denied" in gateway.status_message.lower():
             st.error(
-                "⚠️ **ESP32 COM Port Locked (Access Denied):** Arduino IDE Serial Monitor or another software currently has COM19 open. "
+                "⚠️ **ESP32 COM Port Locked (Access Denied):** Arduino IDE Serial Monitor or another software currently has COM20 open. "
                 "**Please CLOSE the Arduino IDE Serial Monitor window**, then click **'⚡ Connect ESP32'** in the sidebar to stream live geotechnical telemetry."
             )
         elif "failed" in gateway.status_message.lower():

@@ -70,6 +70,7 @@ from modules.data_store import (
     get_system_kpis           # Computes active stations, alerts, and system health
 )
 from modules.hardware_reader import SerialTelemetryGateway, get_hardware_gateway # Non-blocking PySerial ESP32 gateway
+from modules.cloud_relay import fetch_telemetry_from_cloud # Cloud IoT Relay bridge
 from modules.interlock import HighwayInterlockSystem       # Highway interlock & dispatch logger
 from modules.gps_simulator import (
     DEFAULT_GPS_UNITS,  # Default 5 mobile emergency response & patrol units
@@ -178,9 +179,20 @@ elif st.session_state.operating_mode == "HARDWARE":
             if detected_p:
                 gw.connect(detected_p, getattr(gw, "baud", 115200))
 
+    packet = None
     if gw.is_connected:
+        st.session_state.hardware_source = "USB_SERIAL"
         packet = gw.read_latest_packet()
-        if packet:
+    else:
+        # Check if Cloud IoT Relay has an active packet from run_cloud_bridge.py
+        relay_packet = fetch_telemetry_from_cloud(max_age_seconds=60.0)
+        if relay_packet:
+            st.session_state.hardware_source = "CLOUD_RELAY"
+            packet = relay_packet
+        else:
+            st.session_state.hardware_source = "DISCONNECTED"
+
+    if packet:
             # Physical ESP32 receiver telemetry routes directly into Shivpuri (GG-002)
             # and also updates GG-001 and the currently viewed node so all screens reflect live hardware readings
             stn_id = packet.get("station_id", "GG-002")
