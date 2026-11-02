@@ -124,7 +124,7 @@ if 'gps_units' not in st.session_state:
     st.session_state.gps_units = [dict(u) for u in DEFAULT_GPS_UNITS]
 
 if 'serial_gateway' not in st.session_state or not hasattr(st.session_state.serial_gateway, 'auto_detect_esp32'):
-    st.session_state.serial_gateway = get_hardware_gateway(default_port="COM19", default_baud=115200)
+    st.session_state.serial_gateway = get_hardware_gateway(default_port="COM20", default_baud=115200)
     init_port, _ = SerialTelemetryGateway.auto_detect_esp32()
     if init_port:
         st.session_state.serial_gateway.port = init_port
@@ -167,7 +167,7 @@ if st.session_state.operating_mode == "SIMULATION":
     )
 elif st.session_state.operating_mode == "HARDWARE":
     # 1. Read fixed geotechnical station packet via USB serial (CSV or JSON)
-    gw = get_hardware_gateway(default_port="COM19", default_baud=115200)
+    gw = get_hardware_gateway(default_port="COM20", default_baud=115200)
     st.session_state.serial_gateway = gw
     if not gw.is_connected and st.session_state.get("auto_detect_esp", True):
         # Auto-detect and connect to ESP32 on whatever USB port it is plugged into
@@ -440,9 +440,15 @@ with st.sidebar:
             )
         else:
             st.markdown(
-                "<div style='background:rgba(245,158,11,0.12); border:1px solid #F59E0B; border-radius:6px; padding:6px 10px; margin-bottom:8px;'>"
-                "<div style='font-size:11px; font-weight:700; color:#F59E0B;'>⚠️ NO ESP32 DETECTED</div>"
-                "<div style='font-size:10px; color:#9CA3AF;'>Plug ESP32 into any USB port to auto-connect.</div>"
+                "<div style='background:rgba(59,130,246,0.12); border:1px solid #3B82F6; border-radius:6px; padding:10px 12px; margin-bottom:10px;'>"
+                "<div style='font-size:12px; font-weight:700; color:#38BDF8;'>☁️ CLOUD DEPLOYMENT NOTICE</div>"
+                "<div style='font-size:11px; color:#CBD5E1; margin-top:4px; line-height:1.45;'>"
+                "This website is running on Streamlit Cloud. Cloud servers cannot reach physical USB cables on your laptop.<br><br>"
+                "<b>To stream live ESP32 readings:</b><br>"
+                "1. <b>Close Arduino Serial Monitor</b> (to unlock COM20).<br>"
+                "2. Run locally on your laptop: <code>streamlit run app.py</code><br>"
+                "3. Open <b style='color:#38BDF8;'>http://localhost:8501</b>."
+                "</div>"
                 "</div>",
                 unsafe_allow_html=True
             )
@@ -465,7 +471,7 @@ with st.sidebar:
                 default_port_idx = 0
         else:
             avail_ports = gw.list_available_ports()
-            port_labels = avail_ports if avail_ports else ["COM19", "COM3", "COM4", "/dev/ttyUSB0"]
+            port_labels = avail_ports if avail_ports else ["COM20", "COM3", "COM4", "/dev/ttyUSB0"]
             default_port_idx = 0
 
         selected_label = st.selectbox("Serial Port (Auto-Ranked)", port_labels, index=default_port_idx)

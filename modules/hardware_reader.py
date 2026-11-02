@@ -112,7 +112,7 @@ class SerialTelemetryGateway:
                 is_esp32 = True
 
             desc_lower = desc.lower()
-            if any(k in desc_lower for k in ["cp210", "ch340", "ch341", "esp32", "espressif", "uart bridge", "ftdi"]):
+            if any(k in desc_lower for k in ["cp210", "ch340", "ch341", "ch9102", "ch910", "enhanced-serial", "esp32", "espressif", "uart bridge", "ftdi"]):
                 score += 100
                 is_esp32 = True
 
@@ -201,8 +201,8 @@ class SerialTelemetryGateway:
             self.serial_conn.baudrate = int(baud_rate)
             self.serial_conn.timeout = self.timeout
             self.serial_conn.write_timeout = self.timeout
-            self.serial_conn.dtr = False
-            self.serial_conn.rts = False
+            self.serial_conn.dtr = True
+            self.serial_conn.rts = True
             self.serial_conn.open()
             self.port = clean_port
             self.baud = int(baud_rate)
@@ -220,9 +220,9 @@ class SerialTelemetryGateway:
             err_str = str(e)
             if "PermissionError" in err_str or "Access is denied" in err_str or "error 5" in err_str.lower():
                 self.status_message = (
-                    f"Port {clean_port} is busy or locked (Access Denied). "
-                    "⚠️ PLEASE CLOSE ARDUINO SERIAL MONITOR or any other serial software "
-                    "connected to this port, then try again."
+                    f"Port {clean_port} is LOCKED (Access Denied). "
+                    "⚠️ PLEASE CLOSE ARDUINO SERIAL MONITOR in Arduino IDE "
+                    "to release the port, then click Connect again."
                 )
             elif "FileNotFoundError" in err_str or "could not open port" in err_str.lower():
                 self.status_message = f"Port {clean_port} not found or unplugged. Please check USB cable."
@@ -612,7 +612,7 @@ class SerialTelemetryGateway:
 # ---------------------------------------------------------------------------
 _GLOBAL_GATEWAY: Optional[SerialTelemetryGateway] = None
 
-def get_hardware_gateway(default_port: str = "COM19", default_baud: int = 115200) -> SerialTelemetryGateway:
+def get_hardware_gateway(default_port: str = "COM20", default_baud: int = 115200) -> SerialTelemetryGateway:
     """
     Returns the process-wide singleton SerialTelemetryGateway instance.
     Prevents multiple Streamlit browser sessions/tabs from creating competing
