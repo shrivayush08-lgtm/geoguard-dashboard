@@ -191,6 +191,13 @@ elif st.session_state.operating_mode == "HARDWARE":
             packet = relay_packet
         else:
             st.session_state.hardware_source = "DISCONNECTED"
+            # When in Hardware mode but no hardware packet has arrived yet,
+            # execute a background telemetry tick so the website NEVER freezes!
+            st.session_state.stations_telemetry = generate_telemetry_tick(
+                st.session_state.stations_telemetry,
+                emergency=st.session_state.emergency,
+                emergency_target=st.session_state.emergency_target
+            )
 
     if packet:
             # Physical ESP32 receiver telemetry routes directly into Shivpuri (GG-002)

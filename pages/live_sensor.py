@@ -221,7 +221,7 @@ def render_live_sensor_page(enriched_stations):
             elif hw_source == "CLOUD_RELAY":
                 conn_html = "<span style='background: rgba(16, 185, 129, 0.12); border: 1px solid #10B981; color: #10B981; padding: 6px 12px; border-radius: 4px; font-family: monospace; font-size: 11px; font-weight: 600; display: inline-block;'>● CLOUD IOT RELAY ACTIVE</span>"
             else:
-                conn_html = "<span style='background: rgba(239, 68, 68, 0.12); border: 1px solid #EF4444; color: #EF4444; padding: 6px 12px; border-radius: 4px; font-family: monospace; font-size: 11px; font-weight: 600; display: inline-block;'>○ HARDWARE DISCONNECTED</span>"
+                conn_html = "<span style='background: rgba(56, 189, 248, 0.12); border: 1px solid #38BDF8; color: #38BDF8; padding: 6px 12px; border-radius: 4px; font-family: monospace; font-size: 11px; font-weight: 600; display: inline-block;'>● HARDWARE STANDBY (ACTIVE)</span>"
         else:
             conn_html = "<span style='background: rgba(56, 189, 248, 0.12); border: 1px solid #38BDF8; color: #38BDF8; padding: 6px 12px; border-radius: 4px; font-family: monospace; font-size: 11px; font-weight: 600; display: inline-block;'>● SIMULATION MODE ACTIVE</span>"
         
