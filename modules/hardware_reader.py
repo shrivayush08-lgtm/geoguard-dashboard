@@ -268,6 +268,63 @@ class SerialTelemetryGateway:
             round(max(0.0, min(5.0, vibration)), 3)
         )
 
+    def _flush_kv_buffer(self, last_raw_frame: str = "") -> Optional[Dict[str, Any]]:
+        """Flushes accumulated key-value pairs into a validated telemetry packet."""
+        if not self._kv_buffer:
+            return None
+
+        has_essential = any(k in self._kv_buffer for k in ["soil", "tilt", "temp", "accel", "vib", "rain"])
+        if not has_essential:
+            return None
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        raw_soil = float(self._kv_buffer.get("soil", 1500.0))
+        raw_rain_adc = self._kv_buffer.get("rain", 0.0)
+        # Map raw rain ADC (ESP32) or rate to mm/hr
+        if raw_rain_adc > 100.0:
+            rain_mmh = round(max(0.0, min(50.0, ((4095.0 - raw_rain_adc) / 2995.0) * 50.0)), 1)
+        else:
+            rain_mmh = round(float(raw_rain_adc), 1)
+
+        raw_temp = float(self._kv_buffer.get("temp", 22.0))
+
+        if "tilt" in self._kv_buffer:
+            raw_tilt = float(self._kv_buffer["tilt"])
+        elif "accel" in self._kv_buffer:
+            a_val = float(self._kv_buffer["accel"])
+            if abs(a_val) <= 1.05:
+                raw_tilt = round(math.acos(max(-1.0, min(1.0, abs(a_val)))) * 180.0 / math.pi, 2)
+            else:
+                raw_tilt = round(abs(a_val), 2)
+        else:
+            raw_tilt = 0.5
+
+        raw_vib_val = self._kv_buffer.get("vib", None)
+        if raw_vib_val is not None:
+            raw_vib = 0.85 if (float(raw_vib_val) >= 1.0) else 0.02
+        elif "accel" in self._kv_buffer and "tilt" in self._kv_buffer:
+            raw_vib = float(self._kv_buffer.get("accel", 0.02))
+        else:
+            raw_vib = 0.02
+
+        self._kv_buffer.clear()
+        soil_c, temp_c, tilt_c, vib_c = self.convert_raw_sensor_values(raw_soil, raw_temp, raw_tilt, raw_vib)
+        return {
+            "station_id": "GG-002",
+            "soil_moisture_pct": soil_c,
+            "soil_adc": int(raw_soil) if raw_soil > 100 else None,
+            "temperature_c": temp_c,
+            "tilt_degrees": tilt_c,
+            "vibration_pga": vib_c,
+            "rain_intensity_mmh": rain_mmh,
+            "rain_intensity": rain_mmh,
+            "timestamp": now_iso,
+            "is_simulated": False,
+            "raw_frame": last_raw_frame,
+            "is_valid": True,
+            "is_complete": True
+        }
+
     def validate_and_parse_line(self, raw_line: str) -> Optional[Dict[str, Any]]:
         """
         Parses and strictly validates incoming serial frame:
@@ -277,7 +334,7 @@ class SerialTelemetryGateway:
         2. Legacy 4-Field CSV: soilMoisture,temperature,tiltAngle,vibrationPGA
            (Marks rain channel as None / UNAVAILABLE without guessing zero)
         3. JSON payload with 5 or 4 sensor fields
-        4. Arduino Key-Value stream (Soil moisture:, Rain:, Vibration:, Acceleration:)
+        4. Arduino Key-Value stream (Soil moisture:, Rain:, Vibration:, Acceleration:, etc.)
         """
         line = raw_line.strip()
         if not line:
@@ -287,8 +344,8 @@ class SerialTelemetryGateway:
         line_lower = line.lower()
         if any(line_lower.startswith(p) for p in [
             "rst:", "configsip", "clk_drv", "mode:", "load:", "ho ", "entry ",
-            "nrf24", "emergency wi-fi", "mobile emergency", "ap ip", "packet #",
-            "---", "connected to", "ready", "listening", "hard resetting"
+            "nrf24", "emergency wi-fi", "mobile emergency", "ap ip",
+            "connected to", "ready", "listening", "hard resetting"
         ]) or "listening on" in line_lower:
             return None
 
@@ -337,20 +394,33 @@ class SerialTelemetryGateway:
                 return None
 
         # Format 2: Arduino Key-Value stream (from slope / receiver debug prints)
-        line_lower = line.lower()
-        if "soil moisture:" in line_lower or "soil:" in line_lower:
+        # Check for block delimiters first
+        if any(line_lower.startswith(p) for p in ["---", "===", "***", "packet #", "packet:"]) or any(k in line_lower for k in ["status:", "landslide:", "transmission:"]):
+            flushed = self._flush_kv_buffer(line)
+            if flushed:
+                return flushed
+
+        # Check for individual sensor key-value lines
+        if "soil moisture:" in line_lower or "soil:" in line_lower or "moisture:" in line_lower:
             m = re.search(r"[-+]?\d*\.?\d+", line)
-            if m: self._kv_buffer["soil"] = float(m.group())
+            if m:
+                # If soil is already recorded, previous packet cycle completed without delimiter: flush first
+                flushed = None
+                if "soil" in self._kv_buffer and len(self._kv_buffer) >= 2:
+                    flushed = self._flush_kv_buffer(line)
+                self._kv_buffer["soil"] = float(m.group())
+                if flushed:
+                    return flushed
             return None
-        elif "rain:" in line_lower:
+        elif "rain:" in line_lower or "rainfall:" in line_lower:
             m = re.search(r"[-+]?\d*\.?\d+", line)
             if m: self._kv_buffer["rain"] = float(m.group())
             return None
-        elif "vibration:" in line_lower:
+        elif "vibration:" in line_lower or "vib:" in line_lower:
             m = re.search(r"[-+]?\d*\.?\d+", line)
             if m: self._kv_buffer["vib"] = float(m.group())
             return None
-        elif "tilt:" in line_lower:
+        elif "tilt:" in line_lower or "slope:" in line_lower or "pitch:" in line_lower or "roll:" in line_lower:
             m = re.search(r"[-+]?\d*\.?\d+", line)
             if m: self._kv_buffer["tilt"] = float(m.group())
             return None
@@ -358,62 +428,9 @@ class SerialTelemetryGateway:
             m = re.search(r"[-+]?\d*\.?\d+", line)
             if m: self._kv_buffer["temp"] = float(m.group())
             return None
-        elif "acceleration:" in line_lower:
+        elif "acceleration:" in line_lower or "accel:" in line_lower:
             m = re.search(r"[-+]?\d*\.?\d+", line)
             if m: self._kv_buffer["accel"] = float(m.group())
-            return None
-        elif any(k in line_lower for k in ["status:", "landslide:", "transmission:", "---"]):
-            if ("soil" in self._kv_buffer or "tilt" in self._kv_buffer or "vib" in self._kv_buffer or "temp" in self._kv_buffer):
-                raw_soil = float(self._kv_buffer.get("soil", 1500.0))
-                raw_rain_adc = self._kv_buffer.get("rain", 0.0)
-                # Map raw rain ADC (ESP32) or rate to mm/hr
-                if raw_rain_adc > 100.0:
-                    # Inverted/scaled optical rain sensor: lower ADC = more rain or direct
-                    rain_mmh = round(max(0.0, min(50.0, ((4095.0 - raw_rain_adc) / 2995.0) * 50.0)), 1)
-                else:
-                    rain_mmh = round(float(raw_rain_adc), 1)
-
-                raw_temp = float(self._kv_buffer.get("temp", 22.0))
-
-                # Handle Tilt from direct "tilt:" reading or infer from "acceleration:" transducer
-                if "tilt" in self._kv_buffer:
-                    raw_tilt = float(self._kv_buffer["tilt"])
-                elif "accel" in self._kv_buffer:
-                    a_val = float(self._kv_buffer["accel"])
-                    if abs(a_val) <= 1.05:
-                        # Convert 1g gravitational component to angular degrees
-                        raw_tilt = round(math.acos(max(-1.0, min(1.0, abs(a_val)))) * 180.0 / math.pi, 2)
-                    else:
-                        raw_tilt = round(abs(a_val), 2)
-                else:
-                    raw_tilt = 0.5
-
-                # Ground vibration from digital vibration sensor or seismic transducer
-                raw_vib_val = self._kv_buffer.get("vib", None)
-                if raw_vib_val is not None:
-                    raw_vib = 0.85 if (float(raw_vib_val) >= 1.0) else 0.02
-                elif "accel" in self._kv_buffer and "tilt" in self._kv_buffer:
-                    raw_vib = float(self._kv_buffer.get("accel", 0.02))
-                else:
-                    raw_vib = 0.02
-
-                self._kv_buffer.clear()
-                soil_c, temp_c, tilt_c, vib_c = self.convert_raw_sensor_values(raw_soil, raw_temp, raw_tilt, raw_vib)
-                return {
-                    "station_id": "GG-002",
-                    "soil_moisture_pct": soil_c,
-                    "soil_adc": int(raw_soil) if raw_soil > 100 else None,
-                    "temperature_c": temp_c,
-                    "tilt_degrees": tilt_c,
-                    "vibration_pga": vib_c,
-                    "rain_intensity_mmh": rain_mmh,
-                    "rain_intensity": rain_mmh,
-                    "timestamp": now_iso,
-                    "is_simulated": False,
-                    "raw_frame": line,
-                    "is_valid": True,
-                    "is_complete": True
-                }
             return None
 
         # Format 3: Comma-Separated Values (5-field or Legacy 4-field)
